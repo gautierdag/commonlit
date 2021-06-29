@@ -1,0 +1,8 @@
+.ipynb_checkpoints
+common-lit-inference
+huggingface_models
+lightning_logs
+wandb
+models
+.env
+model_versioning.py
