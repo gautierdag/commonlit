@@ -22,7 +22,7 @@ def train_multitask(
     multitask_train_loader = DataLoader(
         dataset=concat_dataset,
         sampler=BatchSchedulerSampler(
-            dataset=concat_dataset, batch_size=params["batch_size"]
+            dataset=concat_dataset, batch_size=params["batch_size"], chunk_task_batches=2
         ),
         collate_fn=collate_fn,
         batch_size=params["batch_size"],

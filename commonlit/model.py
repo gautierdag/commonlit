@@ -160,7 +160,7 @@ class BertClassifierModel(pl.LightningModule):
             lr_groups = self.parameters()
 
 
-        optimizer = torch.optim.AdamW(self.parameters(), 
+        optimizer = torch.optim.AdamW(lr_groups, 
                                       lr=self.learning_rate, 
                                       weight_decay=self.weight_decay)
 

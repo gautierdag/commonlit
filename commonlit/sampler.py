@@ -7,10 +7,11 @@ class BatchSchedulerSampler(torch.utils.data.sampler.Sampler):
     """
     Iterate over tasks and provide a random batch per task in each mini-batch
     """
-    def __init__(self, dataset, batch_size):
+    def __init__(self, dataset, batch_size, chunk_task_batches=1):
         self.dataset = dataset
         self.batch_size = batch_size
         self.number_of_datasets = len(dataset.datasets)
+        self.chunk_task_batches = chunk_task_batches # number of task batches to show consecutively
         self.largest_dataset_size = max([len(cur_dataset.df) for cur_dataset in dataset.datasets if not isinstance(cur_dataset, torch.utils.data.dataset.Subset)])
 
     def __len__(self):
@@ -31,26 +32,27 @@ class BatchSchedulerSampler(torch.utils.data.sampler.Sampler):
         samples_to_grab = self.batch_size
         
         # for this case we want to get all samples in dataset, this force us to resample from the smaller datasets
-        epoch_samples = self.largest_dataset_size * self.number_of_datasets
+        epoch_samples = self.largest_dataset_size * self.number_of_datasets // self.chunk_task_batches
 
         final_samples_list = []  # this is a list of indexes from the combined dataset
         for _ in range(0, epoch_samples, step):
             for i in range(self.number_of_datasets):
-                cur_batch_sampler = sampler_iterators[i]
-                cur_samples = []
-                for _ in range(samples_to_grab):
-                    try:
-                        cur_sample_org = cur_batch_sampler.__next__()
-                        cur_sample = cur_sample_org + push_index_val[i]
-                        cur_samples.append(cur_sample)
-                    except StopIteration:
-                        # got to the end of iterator - restart the iterator and continue to get samples
-                        # until reaching "epoch_samples"
-                        sampler_iterators[i] = samplers_list[i].__iter__()
-                        cur_batch_sampler = sampler_iterators[i]
-                        cur_sample_org = cur_batch_sampler.__next__()
-                        cur_sample = cur_sample_org + push_index_val[i]
-                        cur_samples.append(cur_sample)
-                final_samples_list.extend(cur_samples)
+                for _ in range(self.chunk_task_batches):
+                    cur_batch_sampler = sampler_iterators[i]
+                    cur_samples = []
+                    for _ in range(samples_to_grab):
+                        try:
+                            cur_sample_org = cur_batch_sampler.__next__()
+                            cur_sample = cur_sample_org + push_index_val[i]
+                            cur_samples.append(cur_sample)
+                        except StopIteration:
+                            # got to the end of iterator - restart the iterator and continue to get samples
+                            # until reaching "epoch_samples"
+                            sampler_iterators[i] = samplers_list[i].__iter__()
+                            cur_batch_sampler = sampler_iterators[i]
+                            cur_sample_org = cur_batch_sampler.__next__()
+                            cur_sample = cur_sample_org + push_index_val[i]
+                            cur_samples.append(cur_sample)
+                    final_samples_list.extend(cur_samples)
 
         return iter(final_samples_list)
