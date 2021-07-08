@@ -53,6 +53,7 @@ def train_multitask(
         monitor="val_loss",
         filename=checkpoint_filename,
         mode="min",
+        save_weights_only=True,
     )
 
     # Init our model

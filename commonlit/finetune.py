@@ -2,6 +2,7 @@ import wandb
 import torch
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
+from copy import copy
 
 from pytorch_lightning.callbacks import (
     EarlyStopping,
@@ -13,14 +14,23 @@ from pytorch_lightning.loggers import WandbLogger
 from model import BertClassifierModel
 
 
+def get_finetune_params(params):
+    """
+    Sets all keys that start with finetune_ as the actual values
+    eg: finetune_learning_rate -> learning_rate
+    """
+    finetune_params = copy(params)
+    for k in finetune_params.keys():
+         if "finetune_" in k:
+            parameter_name = k.replace("finetune_", "")
+            finetune_params[parameter_name] = finetune_params[k]
+    return finetune_params
+
 def train_finetune_from_checkpoint(
-    params, checkpoint, train_dataset, val_dataset, collate_fn, wandb_group, fold=0
+    original_params, checkpoint, train_dataset, val_dataset, collate_fn, wandb_group, fold=0
 ):
-    params["learning_rate"] = params["finetune_learning_rate"]
-    params["freeze_layers"] = params["finetune_freeze_layers"]
-    params["val_check_interval"] = params["finetune_val_check_interval"]
-    params["use_warmup"] = params["finetune_use_warmup"]
-    
+    params = get_finetune_params(original_params)
+
     train_loader = DataLoader(
         dataset=train_dataset,
         shuffle=True,
@@ -53,11 +63,14 @@ def train_finetune_from_checkpoint(
         monitor="val_loss",
         filename=checkpoint_filename,
         mode="min",
+        save_weights_only=True,
     )
 
     # Init our model
     model = BertClassifierModel(**params)
-    model.load_from_checkpoint(checkpoint)
+    
+    if checkpoint:
+        model = model.load_from_checkpoint(checkpoint, **params)
 
     print(f"Multi Task Training:")
     # Initialize a trainer

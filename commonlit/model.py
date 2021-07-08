@@ -5,6 +5,34 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from transformers import AutoModel
 
+
+def get_bert_layerwise_lr_groups(bert_model, learning_rate=1e-5, layer_decay=0.9):
+    """
+    Gets parameter groups with decayed learning rate based on depth in network
+    Layers closer to output will have higher learning rate
+    
+    Args:
+        bert_model: A huggingface bert-like model (should have embedding layer and encoder)
+        learning_rate: The learning rate at the output layer
+        layer_decay: How much to decay the learning rate per depth (recommended 0.9-0.95)
+    Returns:
+        grouped_parameters (list): list of parameters with their decayed learning rates
+    """
+    
+    n_layers = len(bert_model.encoder.layer) + 1 # + 1 (embedding)
+
+    embedding_decayed_lr = learning_rate * (layer_decay ** (n_layers+1))
+    grouped_parameters = [{"params": bert_model.embeddings.parameters(), 'lr': embedding_decayed_lr}]
+    for depth in range(1, n_layers):
+        decayed_lr = learning_rate * (layer_decay ** (n_layers + 1 - depth))
+        grouped_parameters.append(
+            {"params": bert_model.encoder.layer[depth-1].parameters(), 'lr': decayed_lr}
+        )
+
+    return grouped_parameters
+
+
+
 class BertClassifierModel(pl.LightningModule):
     def __init__(self, 
                  max_steps=2500, 
@@ -18,6 +46,8 @@ class BertClassifierModel(pl.LightningModule):
                  bert_model="roberta-base",
                  freeze_layers=0,
                  scheduler_rate=500,
+                 decay_lr=True,
+                 use_tanh_constraint=False,
                  **kwargs
                 ):
 
@@ -30,8 +60,17 @@ class BertClassifierModel(pl.LightningModule):
         if dense_dim is None: # use bert dimensionality
             dense_dim = self.text_model.config.hidden_size
         
-        self.dense = nn.Linear(self.text_model.config.hidden_size, 
-                               dense_dim)
+        self.decay_lr = decay_lr
+        self.use_tanh_constraint = use_tanh_constraint
+
+        # self.dense = nn.Linear(self.text_model.config.hidden_size, 
+        #                        dense_dim)
+        self.dense = nn.Sequential(            
+            nn.Linear(self.text_model.config.hidden_size, 512),            
+            nn.Tanh(),                
+            nn.Linear(512, 1),
+            nn.Softmax(dim=1)
+        )
         
         self.output_layers = nn.ModuleDict([
             ["commonlit", nn.Linear(dense_dim, 1)],
@@ -56,7 +95,7 @@ class BertClassifierModel(pl.LightningModule):
         
         if custom_linear_init:
             list(map(self.initialise, self.output_layers.values()))
-            self.initialise(self.dense)
+            list(map(self.initialise, self.dense))
 
     def initialise(self, module):
         if isinstance(module, nn.Linear):
@@ -65,12 +104,18 @@ class BertClassifierModel(pl.LightningModule):
                 module.bias.data.zero_()
 
     def forward(self, text_input, dataset_name="commonlit", **kwargs):
-        outputs = self.text_model(**text_input)
-        x = self.dropout(outputs[0]).mean(dim=1) # use CLS token
-        x = self.dense(x).tanh()
+        outputs = self.text_model(**text_input)[0]
+        # x = self.dropout(outputs[0]).mean(dim=1) # use CLS token
+        # x = self.dense(x).tanh()
+
+        weights = self.dense(outputs)
+        x = torch.sum(weights * outputs, dim=1)
+        
         x = self.dropout(x)
         predictions = self.output_layers[dataset_name](x)
-        if dataset_name == "commonlit":
+
+        # whether to constrain output between the 
+        if dataset_name == "commonlit" and self.use_tanh_constraint:
             return ((predictions.tanh() * 2.9) - 1).squeeze(1)
         return predictions.squeeze(1)
         
@@ -106,6 +151,15 @@ class BertClassifierModel(pl.LightningModule):
                 for param in module.parameters():
                     param.requires_grad = False
 
+        if self.decay_lr:
+            lr_groups = get_bert_layerwise_lr_groups(self.text_model, learning_rate=self.learning_rate)
+            non_bert_layers = [self.dense, self.output_layers] # important to update this
+            non_bert_layers = [{"params": l.parameters(), "lr": self.learning_rate} for l in non_bert_layers]            
+            lr_groups += non_bert_layers
+        else:
+            lr_groups = self.parameters()
+
+
         optimizer = torch.optim.AdamW(self.parameters(), 
                                       lr=self.learning_rate, 
                                       weight_decay=self.weight_decay)
@@ -128,7 +182,7 @@ class BertClassifierModel(pl.LightningModule):
             scheduler_rate = self.scheduler_rate
             scheduler = {
                 "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
-                    optimizer, mode="min", patience=10,
+                    optimizer, mode="min", patience=6,
                 ),
                 "monitor": "val_loss",
                 "interval": "step",

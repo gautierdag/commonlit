@@ -42,24 +42,26 @@ tokenizer = AutoTokenizer.from_pretrained(
 collate_fn = collate_creator(tokenizer)
 
 group = (
-    f"multitask_{hyperparameter_defaults['bert_model']}_" + wandb.util.generate_id()
+    f"{hyperparameter_defaults['bert_model']}_" + wandb.util.generate_id()
 )
 for fold, (train_ids, val_ids) in enumerate(skf.split(dataset, y=y_bins)):
     print(f"Starting fold {fold} for {group}")
     train_dataset = Subset(dataset, train_ids)
-    train_datasets = multitask_datasets + [train_dataset]
     val_dataset = Subset(dataset, val_ids)
 
-    print("Training with Multi Task objective")
-    best_multitask_model, best_multitask_score = train_multitask(
-        hyperparameter_defaults,
-        train_datasets,
-        val_dataset,
-        collate_fn,
-        group,
-        fold=fold,
-    )
-    print(f"Best multitask score for fold {fold}: {best_multitask_score}")
+    best_multitask_model = False
+    if hyperparameter_defaults["use_multitask"]:
+        train_datasets = multitask_datasets + [train_dataset]
+        print("Training with Multi Task objective")
+        best_multitask_model, best_multitask_score = train_multitask(
+            hyperparameter_defaults,
+            train_datasets,
+            val_dataset,
+            collate_fn,
+            group,
+            fold=fold,
+        )
+        print(f"Best multitask score for fold {fold}: {best_multitask_score}")
 
     print("Finetuning")
     _, best_finetune_score = train_finetune_from_checkpoint(hyperparameter_defaults,
