@@ -3,6 +3,8 @@ import pandas as pd
 import torch
 import os
 from torch.utils.data import Dataset
+from datasets import load_dataset
+
 from sklearn.preprocessing import KBinsDiscretizer
 import numpy as np
 from typing import List
@@ -91,7 +93,7 @@ def get_ybins():
     return y_bins
 
 
-def get_ck_12_dataset() -> Dataset:
+def get_ck_12_df()->pd.DataFrame:
     ck_12_df = pd.read_csv("../input/ck12excerpts/ck12.csv")
     ck_12_df["text"] = ck_12_df["excerpt"]
     ck_12_df["target"] = (ck_12_df.level - 3) / 9
@@ -102,10 +104,14 @@ def get_ck_12_dataset() -> Dataset:
         (ck_12_df.excerpt.str.len() > 500) & (ck_12_df.excerpt.str.len() < 1500)
     ].reset_index(drop=True)
     ck_12_df.dropna(inplace=True)
+    return ck_12_df
+
+def get_ck_12_dataset() -> Dataset:
+    ck_12_df = get_ck_12_df()
     return CommonDataset(ck_12_df, dataset_name="ck_12")
 
 
-def get_weebit_dataset() -> Dataset:
+def get_weebit_df() -> pd.DataFrame:
     weebit_df = pd.read_csv(
         "../input/readability-external/weebit_reextracted.tsv", sep="\t"
     )
@@ -117,8 +123,14 @@ def get_weebit_dataset() -> Dataset:
         (weebit_df.excerpt.str.len() > 500) & (weebit_df.excerpt.str.len() < 1500)
     ].reset_index(drop=True)
     weebit_df.dropna(inplace=True)
+    return weebit_df
+
+def get_weebit_dataset() -> Dataset:
+    weebit_df = get_weebit_df()
     return CommonDataset(weebit_df, dataset_name="weebit")
 
+def get_wiki_df()->pd.DataFrame:
+    return pd.read_csv("../input/simple-wiki/simple_wiki.csv")
 
 def get_wiki_dataset() -> Dataset:
     wiki_df = pd.read_csv("../input/simple-wiki/simple_wiki.csv")
@@ -139,7 +151,7 @@ def get_wiki_dataset() -> Dataset:
     return PretrainComparaisonDataset(wiki_df, dataset_name="wiki")
 
 
-def get_onestop_dataset() -> Dataset:
+def get_onestop_df()->pd.DataFrame:
     onestop = []
     i = 0
     p = "../input/onestopenglishcorpus"
@@ -166,12 +178,18 @@ def get_onestop_dataset() -> Dataset:
             {"text_easy": elementary, "text_med": intermediate, "text_hard": advanced}
         )
         i += 1
-    onestop_df = pd.DataFrame(onestop)
+    return pd.DataFrame(onestop)
+
+def get_onestop_dataset() -> Dataset:
+    onestop_df = get_onestop_df()
     return PretrainComparaisonDataset(onestop_df, dataset_name="onestop")
 
 
+def get_race_df()->pd.DataFrame:
+    return pd.read_csv("../input/racehighschooldataset/race_highschool_dataset.csv")
+
 def get_race_dataset() -> Dataset:
-    race_df = pd.read_csv("../input/racehighschooldataset/race_highschool_dataset.csv")
+    race_df = get_race_df()
     return CommonDataset(race_df, dataset_name="race")
 
 
@@ -182,3 +200,70 @@ def get_multitask_datasets() -> List[Dataset]:
     ck_12_dataset = get_ck_12_dataset()
     weebit_dataset = get_weebit_dataset()
     return [wiki_dataset, onestop_dataset, race_dataset, ck_12_dataset, weebit_dataset]
+
+
+def get_mlm_dataset(tokenizer, use_external_files=False):
+    max_seq_length = tokenizer.__dict__["model_max_length"]
+
+
+    if use_external_files:
+        race_df = get_race_df()
+
+    # raw_datasets = load_dataset(
+    #     "csv",
+    #     data_files={
+    #         "train": "../input/mlmdata/mlm_data.csv",
+    #         "validation": "../input/mlmdata/mlm_data_val.csv",
+    #     },
+    # )
+
+
+    from datasets import Dataset, DatasetDict
+
+    train_dataset = Dataset.from_pandas(mlm_data)
+    val_dataset = Dataset.from_pandas(mlm_data_val)
+
+
+    raw_dataset = DatasetDict({"train": train_dataset, "val": val_dataset})
+
+
+    def tokenize_function(examples):
+        return tokenizer(examples["text"], return_special_tokens_mask=True)
+
+    tokenized_datasets = raw_datasets.map(
+        tokenize_function,
+        batched=True,
+        num_proc=1,
+        remove_columns=["text"],
+        load_from_cache_file=False,
+        desc="Running tokenizer on every text in dataset",
+    )
+
+    def group_texts(examples):
+        # Concatenate all texts.
+        concatenated_examples = {k: sum(examples[k], []) for k in examples.keys()}
+        total_length = len(concatenated_examples[list(examples.keys())[0]])
+        # We drop the small remainder, we could add padding if the model supported it instead of this drop, you can
+        # customize this part to your needs.
+        total_length = (total_length // max_seq_length) * max_seq_length
+        # Split by chunks of max_len.
+        result = {
+            k: [
+                t[i : i + max_seq_length]
+                for i in range(0, total_length, max_seq_length)
+            ]
+            for k, t in concatenated_examples.items()
+        }
+        return result
+
+    tokenized_datasets = tokenized_datasets.map(
+        group_texts,
+        batched=True,
+        num_proc=1,
+        load_from_cache_file=False,
+        desc=f"Grouping texts in chunks of {max_seq_length}",
+    )
+
+    train_dataset = tokenized_datasets["train"]
+    eval_dataset = tokenized_datasets["validation"]
+    return (train_dataset, eval_dataset)

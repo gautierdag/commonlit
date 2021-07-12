@@ -2,8 +2,8 @@ from dataset import collate_creator, get_full_train_dataset, get_ybins
 import logging
 import wandb
 import os
-from transformers import AutoTokenizer
-from sklearn.model_selection import StratifiedKFold
+from transformers import AutoTokenizer, DataCollatorForLanguageModeling
+from sklearn.model_selection import KFold
 from pytorch_lightning.utilities.seed import seed_everything
 from torch.utils.data import Subset
 
@@ -27,12 +27,9 @@ wandb.login()
 seed_everything(hyperparameter_defaults["seed"])
 
 
-skf = StratifiedKFold(
-    n_splits=5, shuffle=True, random_state=hyperparameter_defaults["seed"]
-)
+skf = KFold(n_splits=5, shuffle=True, random_state=hyperparameter_defaults["seed"])
 
 dataset = get_full_train_dataset()
-y_bins = get_ybins()
 multitask_datasets = get_multitask_datasets()
 
 tokenizer = AutoTokenizer.from_pretrained(
@@ -40,11 +37,13 @@ tokenizer = AutoTokenizer.from_pretrained(
     model_max_length=hyperparameter_defaults["model_max_length"],
 )
 collate_fn = collate_creator(tokenizer)
-
-group = (
-    f"{hyperparameter_defaults['bert_model']}_" + wandb.util.generate_id()
+mlm_collate_fn = DataCollatorForLanguageModeling(
+    tokenizer=tokenizer, mlm_probability=hyperparameter_defaults["mlm_probability"]
 )
-for fold, (train_ids, val_ids) in enumerate(skf.split(dataset, y=y_bins)):
+
+
+group = f"{hyperparameter_defaults['bert_model']}_" + wandb.util.generate_id()
+for fold, (train_ids, val_ids) in enumerate(skf.split(dataset)):
     print(f"Starting fold {fold} for {group}")
     train_dataset = Subset(dataset, train_ids)
     val_dataset = Subset(dataset, val_ids)
@@ -64,7 +63,8 @@ for fold, (train_ids, val_ids) in enumerate(skf.split(dataset, y=y_bins)):
         print(f"Best multitask score for fold {fold}: {best_multitask_score}")
 
     print("Finetuning")
-    _, best_finetune_score = train_finetune_from_checkpoint(hyperparameter_defaults,
+    _, best_finetune_score = train_finetune_from_checkpoint(
+        hyperparameter_defaults,
         best_multitask_model,
         train_dataset,
         val_dataset,
@@ -73,3 +73,7 @@ for fold, (train_ids, val_ids) in enumerate(skf.split(dataset, y=y_bins)):
         fold=fold,
     )
     print(f"Best finetuning score for fold {fold}: {best_finetune_score}")
+
+    if best_finetune_score > 0.5:
+        print("Not under 0.5 - cancelling run for other folds")
+        break

@@ -11,67 +11,64 @@ from pytorch_lightning.callbacks import (
 )
 from pytorch_lightning.loggers import WandbLogger
 
-from model import BertClassifierModel
+from mlm_model import BertMLMModel
 
 
-def train_finetune_from_checkpoint(
-    params,
-    checkpoint,
-    train_dataset,
-    val_dataset,
-    collate_fn,
-    wandb_group,
-    fold=0,
-    num_epochs=3,
+def get_pretrain_params(params):
+    """
+    Sets all keys that start with pretrain_ as the actual values
+    eg: pretrain_learning_rate -> learning_rate
+    """
+    pretrain_params = copy(params)
+    for k in params.keys():
+        if "pretrain_" in k:
+            parameter_name = k.replace("pretrain_", "")
+            pretrain_params[parameter_name] = pretrain_params[k]
+    return pretrain_params
+
+
+def train_pretrain(
+    all_params, mlm_train_dataset, mlm_val_dataset, mlm_collate_fn, wandb_group, fold=0
 ):
-    train_loader = DataLoader(
-        dataset=train_dataset,
+    params = get_pretrain_params(all_params)
+
+    pretrain_train_loader = DataLoader(
+        mlm_train_dataset,
         shuffle=True,
-        collate_fn=collate_fn,
-        batch_size=params["batch_size"],
         num_workers=6,
-        pin_memory=torch.cuda.is_available(),
+        collate_fn=mlm_collate_fn,
+        batch_size=params["batch_size"],
     )
     val_loader = DataLoader(
-        dataset=val_dataset,
-        batch_size=params["validation_batch_size"],
-        shuffle=False,
-        collate_fn=collate_fn,
+        mlm_val_dataset,
         num_workers=6,
-        pin_memory=torch.cuda.is_available(),
+        collate_fn=mlm_collate_fn,
+        batch_size=params["batch_size"],
     )
 
-    params["max_steps"] = int((len(train_loader) * num_epochs)/ params["accumulate_grads"])
     wandb_logger = WandbLogger(
         project="commonlit",
         entity="commonlitreadabilityprize",
         group=wandb_group,
-        id=f"fold_{fold}_{wandb_group}",
+        id=f"fold_{fold}_{wandb_group}_pretrain",
         config=params,
-        job_type="finetune",
+        job_type="pretrain",
     )
 
-    checkpoint_filename = f"{wandb_group}_fold_{fold}" + "-{val_loss:.2f}"
     checkpoint_callback = ModelCheckpoint(
         dirpath="models",
-        monitor="val_loss",
-        filename=checkpoint_filename,
-        mode="min",
+        filename=f"{wandb_group}_fold_{fold}_pretrain",
         save_weights_only=True,
     )
 
-    # Init our model
-    model = BertClassifierModel(**params)
+    model = BertMLMModel(**params)
 
-    if checkpoint:
-        model = model.load_from_checkpoint(checkpoint, **params)
-
-    print(f"Multi Task Training:")
+    print(f"MLM Pre-Training:")
     # Initialize a trainer
-    trainer = pl.Trainer(
+    pretrain_trainer = pl.Trainer(
         gpus=1,
         accumulate_grad_batches=params["accumulate_grads"],
-        max_epochs=num_epochs,
+        max_epochs=params["max_epochs"],
         progress_bar_refresh_rate=1,
         logger=wandb_logger,
         callbacks=[
@@ -82,21 +79,21 @@ def train_finetune_from_checkpoint(
         stochastic_weight_avg=params["stochastic_weight_avg"],
         log_every_n_steps=params["accumulate_grads"],
     )
+
     # Train the model ⚡
-    trainer.fit(
+    pretrain_trainer.fit(
         model,
-        train_dataloader=train_loader,
+        train_dataloader=pretrain_train_loader,
         val_dataloaders=[val_loader],
     )
+
+    # clean up pretrain logger
     wandb_logger.log_metrics(
-        {"best_val_loss": checkpoint_callback.best_model_score.item()}
+        {"mlm_best_val_loss": checkpoint_callback.best_model_score.item()}
     )
     # save model py code
     wandb.save("model.py")
     wandb.finish()
-
-    del trainer, train_loader, val_loader, model, wandb_logger
-    gc.collect()
 
     return (
         checkpoint_callback.best_model_path,

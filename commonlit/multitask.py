@@ -1,3 +1,4 @@
+from copy import copy
 import wandb
 import torch
 from torch.utils.data import DataLoader
@@ -15,14 +16,31 @@ from sampler import BatchSchedulerSampler
 from model import BertClassifierModel
 
 
+def get_multitask_params(params):
+    """
+    Sets all keys that start with multitask_ as the actual values
+    eg: multitask_learning_rate -> learning_rate
+    """
+    multitask_params = copy(params)
+    for k in params.keys():
+        if "multitask_" in k:
+            parameter_name = k.replace("multitask_", "")
+            multitask_params[parameter_name] = multitask_params[k]
+    return multitask_params
+
+
 def train_multitask(
-    params, train_datasets, val_dataset, collate_fn, wandb_group, fold=0
+    all_params, train_datasets, val_dataset, collate_fn, wandb_group, fold=0
 ):
+    params = get_multitask_params(all_params)
+
     concat_dataset = ConcatDataset(train_datasets)
     multitask_train_loader = DataLoader(
         dataset=concat_dataset,
         sampler=BatchSchedulerSampler(
-            dataset=concat_dataset, batch_size=params["batch_size"], chunk_task_batches=2
+            dataset=concat_dataset,
+            batch_size=params["batch_size"],
+            chunk_task_batches=2,
         ),
         collate_fn=collate_fn,
         batch_size=params["batch_size"],
@@ -46,7 +64,7 @@ def train_multitask(
         config=params,
         job_type="multitask",
     )
-    
+
     checkpoint_filename = f"{wandb_group}_fold_{fold}_multi" + "-{val_loss:.2f}"
     checkpoint_callback = ModelCheckpoint(
         dirpath="models",
@@ -91,4 +109,7 @@ def train_multitask(
     wandb.save("model.py")
     wandb.finish()
 
-    return (checkpoint_callback.best_model_path, checkpoint_callback.best_model_score.item())
+    return (
+        checkpoint_callback.best_model_path,
+        checkpoint_callback.best_model_score.item(),
+    )
