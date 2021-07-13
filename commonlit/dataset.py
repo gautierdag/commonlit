@@ -2,7 +2,7 @@ import random
 import pandas as pd
 import torch
 import os
-from torch.utils.data import Dataset
+from datasets import Dataset, DatasetDict
 from datasets import load_dataset
 
 from sklearn.preprocessing import KBinsDiscretizer
@@ -10,7 +10,7 @@ import numpy as np
 from typing import List
 
 
-class PretrainComparaisonDataset(Dataset):
+class PretrainComparaisonDataset(torch.utils.data.Dataset):
     """
     Dataset class for aligned text (simple vs hard - same content)
     """
@@ -40,7 +40,7 @@ class PretrainComparaisonDataset(Dataset):
         return sample
 
 
-class CommonDataset(Dataset):
+class CommonDataset(torch.utils.data.Dataset):
     def __init__(self, df, dataset_name="commonlit"):
         self.df = df
         self.dataset_name = dataset_name
@@ -76,9 +76,13 @@ def collate_creator(tokenizer):
 
     return collate_fn
 
-
-def get_full_train_dataset() -> Dataset:
+def get_train_df():
     train = pd.read_csv("../input/commonlitreadabilityprize/train.csv")
+    return train
+
+
+def get_full_train_dataset() -> torch.utils.data.Dataset:
+    train = get_train_df()
     dataset = CommonDataset(train)
     return dataset
 
@@ -93,7 +97,7 @@ def get_ybins():
     return y_bins
 
 
-def get_ck_12_df()->pd.DataFrame:
+def get_ck_12_df() -> pd.DataFrame:
     ck_12_df = pd.read_csv("../input/ck12excerpts/ck12.csv")
     ck_12_df["text"] = ck_12_df["excerpt"]
     ck_12_df["target"] = (ck_12_df.level - 3) / 9
@@ -106,7 +110,8 @@ def get_ck_12_df()->pd.DataFrame:
     ck_12_df.dropna(inplace=True)
     return ck_12_df
 
-def get_ck_12_dataset() -> Dataset:
+
+def get_ck_12_dataset() -> torch.utils.data.Dataset:
     ck_12_df = get_ck_12_df()
     return CommonDataset(ck_12_df, dataset_name="ck_12")
 
@@ -125,14 +130,13 @@ def get_weebit_df() -> pd.DataFrame:
     weebit_df.dropna(inplace=True)
     return weebit_df
 
-def get_weebit_dataset() -> Dataset:
+
+def get_weebit_dataset() -> torch.utils.data.Dataset:
     weebit_df = get_weebit_df()
     return CommonDataset(weebit_df, dataset_name="weebit")
 
-def get_wiki_df()->pd.DataFrame:
-    return pd.read_csv("../input/simple-wiki/simple_wiki.csv")
 
-def get_wiki_dataset() -> Dataset:
+def get_wiki_df() -> pd.DataFrame:
     wiki_df = pd.read_csv("../input/simple-wiki/simple_wiki.csv")
     small_texts_ids = wiki_df[
         (wiki_df.text.str.len() < 500) | (wiki_df.text.str.len() > 1500)
@@ -148,10 +152,15 @@ def get_wiki_dataset() -> Dataset:
         ["simple_text", "hard_text"]
     ].reset_index(drop=True)
     wiki_df.dropna(inplace=True)
+    return wiki_df
+
+
+def get_wiki_dataset() -> torch.utils.data.Dataset:
+    wiki_df = get_wiki_df()
     return PretrainComparaisonDataset(wiki_df, dataset_name="wiki")
 
 
-def get_onestop_df()->pd.DataFrame:
+def get_onestop_df() -> pd.DataFrame:
     onestop = []
     i = 0
     p = "../input/onestopenglishcorpus"
@@ -180,20 +189,22 @@ def get_onestop_df()->pd.DataFrame:
         i += 1
     return pd.DataFrame(onestop)
 
-def get_onestop_dataset() -> Dataset:
+
+def get_onestop_dataset() -> torch.utils.data.Dataset:
     onestop_df = get_onestop_df()
     return PretrainComparaisonDataset(onestop_df, dataset_name="onestop")
 
 
-def get_race_df()->pd.DataFrame:
+def get_race_df() -> pd.DataFrame:
     return pd.read_csv("../input/racehighschooldataset/race_highschool_dataset.csv")
 
-def get_race_dataset() -> Dataset:
+
+def get_race_dataset() -> torch.utils.data.Dataset:
     race_df = get_race_df()
     return CommonDataset(race_df, dataset_name="race")
 
 
-def get_multitask_datasets() -> List[Dataset]:
+def get_multitask_datasets() -> List[torch.utils.data.Dataset]:
     wiki_dataset = get_wiki_dataset()
     onestop_dataset = get_onestop_dataset()
     race_dataset = get_race_dataset()
@@ -202,30 +213,47 @@ def get_multitask_datasets() -> List[Dataset]:
     return [wiki_dataset, onestop_dataset, race_dataset, ck_12_dataset, weebit_dataset]
 
 
-def get_mlm_dataset(tokenizer, use_external_files=False):
+def get_mlm_dataset(train_idxs, val_idxs, tokenizer, use_external_files=False):
     max_seq_length = tokenizer.__dict__["model_max_length"]
+    train = get_train_df()
+    train_df = train.loc[train_idxs][["excerpt"]].copy().reset_index(drop=True)
+    val_df = train.loc[val_idxs][["excerpt"]].copy().reset_index(drop=True).rename(columns={"excerpt": "text"})
 
-
+    # add text from other sources
     if use_external_files:
+        wiki_df = get_wiki_df()
+        onestop_df = get_onestop_df()
         race_df = get_race_df()
+        ck_12_df = get_ck_12_df()
+        weebit_df = get_weebit_df()
 
-    # raw_datasets = load_dataset(
-    #     "csv",
-    #     data_files={
-    #         "train": "../input/mlmdata/mlm_data.csv",
-    #         "validation": "../input/mlmdata/mlm_data_val.csv",
-    #     },
-    # )
+        train_text_df = (
+            pd.concat(
+                [
+                    ck_12_df.excerpt,
+                    race_df.excerpt,
+                    weebit_df.excerpt,
+                    wiki_df.simple_text,
+                    wiki_df.hard_text,
+                    onestop_df.text_easy,
+                    onestop_df.text_med,
+                    onestop_df.text_hard,
+                    train_df.excerpt
+                ]
+            )
+            .rename("text")
+            .reset_index(drop=True).to_frame()
+        )
 
+    # combined_df
+    else:
+        train_text_df =  train_df.rename(columns={"excerpt": "text"})
 
-    from datasets import Dataset, DatasetDict
+    # combined_df
+    train_dataset = Dataset.from_pandas(train_text_df)
+    val_dataset = Dataset.from_pandas(val_df)
 
-    train_dataset = Dataset.from_pandas(mlm_data)
-    val_dataset = Dataset.from_pandas(mlm_data_val)
-
-
-    raw_dataset = DatasetDict({"train": train_dataset, "val": val_dataset})
-
+    raw_datasets = DatasetDict({"train": train_dataset, "val": val_dataset})
 
     def tokenize_function(examples):
         return tokenizer(examples["text"], return_special_tokens_mask=True)
@@ -265,5 +293,5 @@ def get_mlm_dataset(tokenizer, use_external_files=False):
     )
 
     train_dataset = tokenized_datasets["train"]
-    eval_dataset = tokenized_datasets["validation"]
+    eval_dataset = tokenized_datasets["val"]
     return (train_dataset, eval_dataset)

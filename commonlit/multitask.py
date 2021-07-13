@@ -14,6 +14,8 @@ from pytorch_lightning.loggers import WandbLogger
 
 from sampler import BatchSchedulerSampler
 from model import BertClassifierModel
+from mlm_model import BertMLMModel
+
 
 
 def get_multitask_params(params):
@@ -30,7 +32,14 @@ def get_multitask_params(params):
 
 
 def train_multitask(
-    all_params, train_datasets, val_dataset, collate_fn, wandb_group, fold=0
+    all_params,
+    train_datasets,
+    val_dataset,
+    collate_fn,
+    wandb_group,
+    pretrained_checkpoint_path=False,
+    checkpoint_type="pretrain",
+    fold=0,
 ):
     params = get_multitask_params(all_params)
 
@@ -47,13 +56,17 @@ def train_multitask(
         num_workers=6,
         pin_memory=torch.cuda.is_available(),
     )
-    val_loader = DataLoader(
+    multitask_val_loader = DataLoader(
         dataset=val_dataset,
         batch_size=params["validation_batch_size"],
         shuffle=False,
         collate_fn=collate_fn,
         num_workers=6,
         pin_memory=torch.cuda.is_available(),
+    )
+    params["max_steps"] = int(
+        (len(multitask_train_loader) * params["num_epochs"])
+        / params["accumulate_grads"]
     )
 
     wandb_logger = WandbLogger(
@@ -77,12 +90,20 @@ def train_multitask(
     # Init our model
     model = BertClassifierModel(**params)
 
+    if pretrained_checkpoint_path:
+        print(f"loading weights from {pretrained_checkpoint_path}")
+        if checkpoint_type == "pretrain":
+            pretrained_model = BertMLMModel().load_from_checkpoint(pretrained_checkpoint_path)
+            model.text_model.load_state_dict(pretrained_model.text_model.roberta.state_dict(), strict=False)
+        else:
+            assert ValueError("loading from multitask for multitask is not implemented")
+
     print(f"Multi Task Training:")
     # Initialize a trainer
     multitask_trainer = pl.Trainer(
         gpus=1,
         accumulate_grad_batches=params["accumulate_grads"],
-        max_epochs=20,
+        max_epochs=params["num_epochs"],
         progress_bar_refresh_rate=1,
         logger=wandb_logger,
         callbacks=[
@@ -98,7 +119,7 @@ def train_multitask(
     multitask_trainer.fit(
         model,
         train_dataloader=multitask_train_loader,
-        val_dataloaders=[val_loader],
+        val_dataloaders=[multitask_val_loader],
     )
 
     # clean up multitask logger

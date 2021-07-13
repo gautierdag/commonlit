@@ -35,16 +35,17 @@ def train_pretrain(
     pretrain_train_loader = DataLoader(
         mlm_train_dataset,
         shuffle=True,
-        num_workers=6,
         collate_fn=mlm_collate_fn,
+        num_workers=6,
         batch_size=params["batch_size"],
     )
-    val_loader = DataLoader(
+    pretrain_val_loader = DataLoader(
         mlm_val_dataset,
-        num_workers=6,
         collate_fn=mlm_collate_fn,
+        num_workers=6,
         batch_size=params["batch_size"],
     )
+    params["max_steps"] = int((len(pretrain_train_loader) * params["num_epochs"])/ params["accumulate_grads"])
 
     wandb_logger = WandbLogger(
         project="commonlit",
@@ -57,6 +58,7 @@ def train_pretrain(
 
     checkpoint_callback = ModelCheckpoint(
         dirpath="models",
+        monitor="mlm_val_loss",
         filename=f"{wandb_group}_fold_{fold}_pretrain",
         save_weights_only=True,
     )
@@ -84,7 +86,7 @@ def train_pretrain(
     pretrain_trainer.fit(
         model,
         train_dataloader=pretrain_train_loader,
-        val_dataloaders=[val_loader],
+        val_dataloaders=[pretrain_val_loader],
     )
 
     # clean up pretrain logger

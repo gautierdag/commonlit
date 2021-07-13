@@ -12,17 +12,18 @@ from pytorch_lightning.callbacks import (
 from pytorch_lightning.loggers import WandbLogger
 
 from model import BertClassifierModel
+from mlm_model import BertMLMModel
 
 
 def train_finetune_from_checkpoint(
     params,
-    checkpoint,
     train_dataset,
     val_dataset,
     collate_fn,
     wandb_group,
+    pretrained_checkpoint_path=False,
+    checkpoint_type="multi",
     fold=0,
-    num_epochs=3,
 ):
     train_loader = DataLoader(
         dataset=train_dataset,
@@ -41,7 +42,7 @@ def train_finetune_from_checkpoint(
         pin_memory=torch.cuda.is_available(),
     )
 
-    params["max_steps"] = int((len(train_loader) * num_epochs)/ params["accumulate_grads"])
+    params["max_steps"] = int((len(train_loader) * params["num_epochs"])/ params["accumulate_grads"])
     wandb_logger = WandbLogger(
         project="commonlit",
         entity="commonlitreadabilityprize",
@@ -63,15 +64,22 @@ def train_finetune_from_checkpoint(
     # Init our model
     model = BertClassifierModel(**params)
 
-    if checkpoint:
-        model = model.load_from_checkpoint(checkpoint, **params)
+    if pretrained_checkpoint_path:
+        print(f"Loading weights from {pretrained_checkpoint_path}")
+        if checkpoint_type == "pretrain":
+            pretrained_model = BertMLMModel().load_from_checkpoint(pretrained_checkpoint_path)
+            model.text_model.load_state_dict(pretrained_model.text_model.roberta.state_dict(), strict=False)
+        elif checkpoint_type == "multi":
+            model = model.load_from_checkpoint(pretrained_checkpoint_path, **params)
+        else:
+            assert ValueError(f"Loading from {checkpoint_type} is not implemented")
 
-    print(f"Multi Task Training:")
+    print(f"Final Finetuning Training:")
     # Initialize a trainer
     trainer = pl.Trainer(
         gpus=1,
         accumulate_grad_batches=params["accumulate_grads"],
-        max_epochs=num_epochs,
+        max_epochs=params["num_epochs"],
         progress_bar_refresh_rate=1,
         logger=wandb_logger,
         callbacks=[
