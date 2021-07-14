@@ -80,6 +80,10 @@ def get_train_df():
     train = pd.read_csv("../input/commonlitreadabilityprize/train.csv")
     return train
 
+def get_test_df():
+    train = pd.read_csv("../input/commonlitreadabilityprize/test.csv")
+    return train
+
 
 def get_full_train_dataset() -> torch.utils.data.Dataset:
     train = get_train_df()
@@ -213,11 +217,12 @@ def get_multitask_datasets() -> List[torch.utils.data.Dataset]:
     return [wiki_dataset, onestop_dataset, race_dataset, ck_12_dataset, weebit_dataset]
 
 
-def get_mlm_dataset(train_idxs, val_idxs, tokenizer, use_external_files=False):
+def get_mlm_dataset(tokenizer, use_external_files=False):
     max_seq_length = tokenizer.__dict__["model_max_length"]
     train = get_train_df()
-    train_df = train.loc[train_idxs][["excerpt"]].copy().reset_index(drop=True)
-    val_df = train.loc[val_idxs][["excerpt"]].copy().reset_index(drop=True).rename(columns={"excerpt": "text"})
+    val = get_test_df()
+    train_df = train[["excerpt"]].copy().reset_index(drop=True)
+    val_df = val[["excerpt"]].copy().reset_index(drop=True).rename(columns={"excerpt": "text"})
 
     # add text from other sources
     if use_external_files:

@@ -22,10 +22,10 @@ class BertMLMModel(pl.LightningModule):
         self.model_type = "BertClassifierModel"
 
         # Load Text Model
-        config = AutoConfig.from_pretrained(f"../input/huggingfacemodels/{bert_model}/transformer")
-        config.update({"layer_norm_eps": 1e-7, "hidden_dropout_prob": dropout}) 
+        # config = AutoConfig.from_pretrained(f"../input/huggingfacemodels/{bert_model}/transformer")
+        # config.update({"layer_norm_eps": 1e-7, "hidden_dropout_prob": dropout})
         self.text_model = AutoModelForMaskedLM.from_pretrained(
-            f"../input/huggingfacemodels/{bert_model}/transformer", config=config
+            f"../input/huggingfacemodels/{bert_model}/transformer"
         )
 
         # optimiser settings
@@ -51,9 +51,20 @@ class BertMLMModel(pl.LightningModule):
 
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
-            self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay
-        )
+        # disable weight decay on bias and layernorm 
+        no_decay = ["bias", "LayerNorm.weight"]
+        optimizer_grouped_parameters = [
+            {
+                "params": [p for n, p in self.text_model.named_parameters() if not any(nd in n for nd in no_decay)],
+                "weight_decay": self.weight_decay,
+            },
+            {
+                "params": [p for n, p in self.text_model.named_parameters() if any(nd in n for nd in no_decay)],
+                "weight_decay": 0.0,
+            },
+        ]
+        optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=self.learning_rate)
+        
         schedule = get_cosine_schedule_with_warmup(
             optimizer,
             num_warmup_steps=self.warmup,

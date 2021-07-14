@@ -14,7 +14,7 @@ from dataset import (
     get_ybins,
     get_multitask_datasets,
     collate_creator,
-    get_mlm_dataset
+    get_mlm_dataset,
 )
 from pretrain import train_pretrain
 from multitask import train_multitask
@@ -45,26 +45,34 @@ mlm_collate_fn = DataCollatorForLanguageModeling(
     tokenizer=tokenizer, mlm_probability=hyperparameter_defaults["mlm_probability"]
 )
 
+# Log Group
 group = f"{hyperparameter_defaults['bert_model']}_" + wandb.util.generate_id()
+
+
+# Pretraining (done outside fold using all data)
+checkpoint_type = "pretrain"
+pretrained_checkpoint_path = False
+if hyperparameter_defaults["pretrain"]:
+    print("Training with MLM objective")
+    pretrain_dataset, pretrain_val_dataset = get_mlm_dataset(
+        tokenizer,
+        use_external_files=hyperparameter_defaults["pretrain_external_files"],
+    )
+    best_pretrain_model, _ = train_pretrain(
+        hyperparameter_defaults,
+        pretrain_dataset,
+        pretrain_val_dataset,
+        mlm_collate_fn,
+        group,
+    )
+    pretrained_checkpoint_path = best_pretrain_model
+
+
 for fold, (train_ids, val_ids) in enumerate(skf.split(dataset)):
     print(f"Starting fold {fold} for {group}")
     train_dataset = Subset(dataset, train_ids)
     val_dataset = Subset(dataset, val_ids)
-
-    checkpoint_type = "pretrain"
-    pretrained_checkpoint_path = False
-    if hyperparameter_defaults["pretrain"]:
-        print("Training with MLM objective")
-        pretrain_dataset, pretrain_val_dataset = get_mlm_dataset(train_ids, val_ids, tokenizer)
-        best_pretrain_model, _ = train_pretrain(
-            hyperparameter_defaults,
-            pretrain_dataset,
-            pretrain_val_dataset,
-            mlm_collate_fn,
-            group,
-            fold=fold,
-        )
-        pretrained_checkpoint_path = best_pretrain_model
+    checkpoint_path = pretrained_checkpoint_path
 
     best_multitask_model = False
     if hyperparameter_defaults["multitask"]:
@@ -82,7 +90,7 @@ for fold, (train_ids, val_ids) in enumerate(skf.split(dataset)):
         )
         print(f"Best multitask score for fold {fold}: {best_multitask_score}")
         checkpoint_type = "multi"
-        pretrained_checkpoint_path = best_multitask_model
+        checkpoint_path = best_multitask_model
 
     print("Finetuning")
     _, best_finetune_score = train_finetune_from_checkpoint(
@@ -92,7 +100,7 @@ for fold, (train_ids, val_ids) in enumerate(skf.split(dataset)):
         collate_fn,
         group,
         fold=fold,
-        pretrained_checkpoint_path=pretrained_checkpoint_path,
+        pretrained_checkpoint_path=checkpoint_path,
         checkpoint_type=checkpoint_type,
     )
     print(f"Best finetuning score for fold {fold}: {best_finetune_score}")

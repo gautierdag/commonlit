@@ -23,6 +23,7 @@ hyperparameter_defaults = {
     "val_check_interval": 16,  # evaluate every 10 steps
     "mlm_probability": 0.15,
     "pretrain": True,
+    "pretrain_external_files": True,
     "pretrain_max_epochs": 5,
     "pretrain_weight_decay": 0.01,
     "pretrain_learning_rate": 5e-5,

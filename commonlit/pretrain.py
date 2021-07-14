@@ -77,7 +77,7 @@ def train_pretrain(
             checkpoint_callback,
             LearningRateMonitor(logging_interval="step"),
         ],
-        val_check_interval=params["val_check_interval"],
+        val_check_interval=0.1,
         stochastic_weight_avg=params["stochastic_weight_avg"],
         log_every_n_steps=params["accumulate_grads"],
     )
