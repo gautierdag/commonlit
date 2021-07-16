@@ -40,6 +40,7 @@ def get_bert_layerwise_lr_groups(bert_model, learning_rate=1e-5, layer_decay=0.9
 class BertClassifierModel(pl.LightningModule):
     def __init__(
         self,
+        bert_model,
         max_steps=2500,
         use_warmup=False,
         learning_rate=1e-5,
@@ -48,13 +49,12 @@ class BertClassifierModel(pl.LightningModule):
         warmup_steps=0.06,  # percentage of steps to warmup for
         dense_dim=None,
         custom_linear_init=True,
-        bert_model="roberta-base",
         freeze_layers=0,
         scheduler_rate=500,
         decay_lr=True,
         use_tanh_constraint=False,
-        commonlit_loss_weight=1, #loss multiplier for commonlit
-        sqrt_mse_loss=False, # whether to sqrt the loss during training
+        commonlit_loss_weight=1,  # loss multiplier for commonlit
+        sqrt_mse_loss=False,  # whether to sqrt the loss during training
         **kwargs,
     ):
 
@@ -62,8 +62,10 @@ class BertClassifierModel(pl.LightningModule):
         self.model_type = "BertClassifierModel"
 
         # Load Text Model
-        config = AutoConfig.from_pretrained(f"../input/huggingfacemodels/{bert_model}/transformer")
-        config.update({"layer_norm_eps": 1e-7, "hidden_dropout_prob": dropout}) 
+        config = AutoConfig.from_pretrained(
+            f"../input/huggingfacemodels/{bert_model}/transformer"
+        )
+        config.update({"layer_norm_eps": 1e-7, "hidden_dropout_prob": 0.0})
         self.text_model = AutoModel.from_pretrained(
             f"../input/huggingfacemodels/{bert_model}/transformer", config=config
         )
@@ -164,7 +166,9 @@ class BertClassifierModel(pl.LightningModule):
 
     def validation_step(self, val_batch, val_batch_idx, **kwargs):
         predicted_targets = self(**val_batch)
-        target_loss = torch.sqrt(self.eval_criterion(predicted_targets, val_batch["target"]))
+        target_loss = torch.sqrt(
+            self.eval_criterion(predicted_targets, val_batch["target"])
+        )
         self.log("val_loss", target_loss, prog_bar=True)
         return target_loss
 

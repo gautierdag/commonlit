@@ -76,9 +76,11 @@ def collate_creator(tokenizer):
 
     return collate_fn
 
+
 def get_train_df():
     train = pd.read_csv("../input/commonlitreadabilityprize/train.csv")
     return train
+
 
 def get_test_df():
     train = pd.read_csv("../input/commonlitreadabilityprize/test.csv")
@@ -222,7 +224,12 @@ def get_mlm_dataset(tokenizer, use_external_files=False):
     train = get_train_df()
     val = get_test_df()
     train_df = train[["excerpt"]].copy().reset_index(drop=True)
-    val_df = val[["excerpt"]].copy().reset_index(drop=True).rename(columns={"excerpt": "text"})
+    val_df = (
+        val[["excerpt"]]
+        .copy()
+        .reset_index(drop=True)
+        .rename(columns={"excerpt": "text"})
+    )
 
     # add text from other sources
     if use_external_files:
@@ -243,16 +250,17 @@ def get_mlm_dataset(tokenizer, use_external_files=False):
                     onestop_df.text_easy,
                     onestop_df.text_med,
                     onestop_df.text_hard,
-                    train_df.excerpt
+                    train_df.excerpt,
                 ]
             )
             .rename("text")
-            .reset_index(drop=True).to_frame()
+            .reset_index(drop=True)
+            .to_frame()
         )
 
     # combined_df
     else:
-        train_text_df =  train_df.rename(columns={"excerpt": "text"})
+        train_text_df = train_df.rename(columns={"excerpt": "text"})
 
     # combined_df
     train_dataset = Dataset.from_pandas(train_text_df)

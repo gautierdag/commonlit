@@ -17,7 +17,6 @@ from model import BertClassifierModel
 from mlm_model import BertMLMModel
 
 
-
 def get_multitask_params(params):
     """
     Sets all keys that start with multitask_ as the actual values
@@ -49,12 +48,12 @@ def train_multitask(
         sampler=BatchSchedulerSampler(
             dataset=concat_dataset,
             batch_size=params["batch_size"],
-            chunk_task_batches=2,
+            chunk_task_batches=params["chunk_task_batches"],
         ),
         collate_fn=collate_fn,
         batch_size=params["batch_size"],
         num_workers=6,
-        pin_memory=torch.cuda.is_available(),
+        # pin_memory=torch.cuda.is_available(),
     )
     multitask_val_loader = DataLoader(
         dataset=val_dataset,
@@ -62,10 +61,14 @@ def train_multitask(
         shuffle=False,
         collate_fn=collate_fn,
         num_workers=6,
-        pin_memory=torch.cuda.is_available(),
+        # pin_memory=torch.cuda.is_available(),
     )
     params["max_steps"] = int(
-        (len(multitask_train_loader) * params["num_epochs"])
+        (
+            len(multitask_train_loader)
+            * params["max_epochs"]
+            * params["multitask_limit_train_batches"]
+        )
         / params["accumulate_grads"]
     )
 
@@ -93,8 +96,14 @@ def train_multitask(
     if pretrained_checkpoint_path:
         print(f"loading weights from {pretrained_checkpoint_path}")
         if checkpoint_type == "pretrain":
-            pretrained_model = BertMLMModel().load_from_checkpoint(pretrained_checkpoint_path)
-            model.text_model.load_state_dict(pretrained_model.text_model.roberta.state_dict(), strict=False)
+            pretrained_model = BertMLMModel(
+                bert_model=params["bert_model"]
+            ).load_from_checkpoint(
+                pretrained_checkpoint_path, bert_model=params["bert_model"]
+            )
+            model.text_model.load_state_dict(
+                pretrained_model.text_model.roberta.state_dict(), strict=False
+            )
         else:
             assert ValueError("loading from multitask for multitask is not implemented")
 
@@ -103,7 +112,7 @@ def train_multitask(
     multitask_trainer = pl.Trainer(
         gpus=1,
         accumulate_grad_batches=params["accumulate_grads"],
-        max_epochs=params["num_epochs"],
+        max_epochs=params["max_epochs"],
         progress_bar_refresh_rate=1,
         logger=wandb_logger,
         callbacks=[
@@ -114,6 +123,7 @@ def train_multitask(
         val_check_interval=params["val_check_interval"],
         stochastic_weight_avg=params["stochastic_weight_avg"],
         log_every_n_steps=params["accumulate_grads"],
+        limit_train_batches=params["limit_train_batches"],
     )
     # Train the model ⚡
     multitask_trainer.fit(

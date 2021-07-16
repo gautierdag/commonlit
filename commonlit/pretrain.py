@@ -28,7 +28,7 @@ def get_pretrain_params(params):
 
 
 def train_pretrain(
-    all_params, mlm_train_dataset, mlm_val_dataset, mlm_collate_fn, wandb_group, fold=0
+    all_params, mlm_train_dataset, mlm_val_dataset, mlm_collate_fn, wandb_group
 ):
     params = get_pretrain_params(all_params)
 
@@ -45,13 +45,15 @@ def train_pretrain(
         num_workers=6,
         batch_size=params["batch_size"],
     )
-    params["max_steps"] = int((len(pretrain_train_loader) * params["num_epochs"])/ params["accumulate_grads"])
+    params["max_steps"] = int(
+        (len(pretrain_train_loader) * params["max_epochs"]) / params["accumulate_grads"]
+    )
 
     wandb_logger = WandbLogger(
         project="commonlit",
         entity="commonlitreadabilityprize",
         group=wandb_group,
-        id=f"fold_{fold}_{wandb_group}_pretrain",
+        id=f"{wandb_group}_pretrain",
         config=params,
         job_type="pretrain",
     )
@@ -59,7 +61,7 @@ def train_pretrain(
     checkpoint_callback = ModelCheckpoint(
         dirpath="models",
         monitor="mlm_val_loss",
-        filename=f"{wandb_group}_fold_{fold}_pretrain",
+        filename=f"{wandb_group}_pretrain",
         save_weights_only=True,
     )
 
@@ -77,7 +79,7 @@ def train_pretrain(
             checkpoint_callback,
             LearningRateMonitor(logging_interval="step"),
         ],
-        val_check_interval=0.1,
+        val_check_interval=params["val_check_interval"],
         stochastic_weight_avg=params["stochastic_weight_avg"],
         log_every_n_steps=params["accumulate_grads"],
     )

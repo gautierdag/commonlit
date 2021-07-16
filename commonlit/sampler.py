@@ -7,15 +7,28 @@ class BatchSchedulerSampler(torch.utils.data.sampler.Sampler):
     """
     Iterate over tasks and provide a random batch per task in each mini-batch
     """
+
     def __init__(self, dataset, batch_size, chunk_task_batches=1):
         self.dataset = dataset
         self.batch_size = batch_size
         self.number_of_datasets = len(dataset.datasets)
-        self.chunk_task_batches = chunk_task_batches # number of task batches to show consecutively
-        self.largest_dataset_size = max([len(cur_dataset.df) for cur_dataset in dataset.datasets if not isinstance(cur_dataset, torch.utils.data.dataset.Subset)])
+        self.chunk_task_batches = (
+            chunk_task_batches  # number of task batches to show consecutively
+        )
+        self.largest_dataset_size = max(
+            [
+                len(cur_dataset.df)
+                for cur_dataset in dataset.datasets
+                if not isinstance(cur_dataset, torch.utils.data.dataset.Subset)
+            ]
+        )
 
     def __len__(self):
-        return self.batch_size * math.ceil(self.largest_dataset_size / self.batch_size) * len(self.dataset.datasets)
+        return (
+            self.batch_size
+            * math.ceil(self.largest_dataset_size / self.batch_size)
+            * len(self.dataset.datasets)
+        )
 
     def __iter__(self):
         samplers_list = []
@@ -30,9 +43,13 @@ class BatchSchedulerSampler(torch.utils.data.sampler.Sampler):
         push_index_val = [0] + self.dataset.cumulative_sizes[:-1]
         step = self.batch_size * self.number_of_datasets
         samples_to_grab = self.batch_size
-        
+
         # for this case we want to get all samples in dataset, this force us to resample from the smaller datasets
-        epoch_samples = self.largest_dataset_size * self.number_of_datasets // self.chunk_task_batches
+        epoch_samples = (
+            self.largest_dataset_size
+            * self.number_of_datasets
+            // self.chunk_task_batches
+        )
 
         final_samples_list = []  # this is a list of indexes from the combined dataset
         for _ in range(0, epoch_samples, step):

@@ -31,7 +31,7 @@ def train_finetune_from_checkpoint(
         collate_fn=collate_fn,
         batch_size=params["batch_size"],
         num_workers=6,
-        pin_memory=torch.cuda.is_available(),
+        # pin_memory=torch.cuda.is_available(),
     )
     val_loader = DataLoader(
         dataset=val_dataset,
@@ -39,10 +39,12 @@ def train_finetune_from_checkpoint(
         shuffle=False,
         collate_fn=collate_fn,
         num_workers=6,
-        pin_memory=torch.cuda.is_available(),
+        # pin_memory=torch.cuda.is_available(),
     )
 
-    params["max_steps"] = int((len(train_loader) * params["num_epochs"])/ params["accumulate_grads"])
+    params["max_steps"] = int(
+        (len(train_loader) * params["max_epochs"]) / params["accumulate_grads"]
+    )
     wandb_logger = WandbLogger(
         project="commonlit",
         entity="commonlitreadabilityprize",
@@ -62,13 +64,19 @@ def train_finetune_from_checkpoint(
     )
 
     # Init our model
+    print(params["bert_model"])
     model = BertClassifierModel(**params)
-
     if pretrained_checkpoint_path:
         print(f"Loading weights from {pretrained_checkpoint_path}")
         if checkpoint_type == "pretrain":
-            pretrained_model = BertMLMModel().load_from_checkpoint(pretrained_checkpoint_path)
-            model.text_model.load_state_dict(pretrained_model.text_model.roberta.state_dict(), strict=False)
+            pretrained_model = BertMLMModel(
+                bert_model=params["bert_model"]
+            ).load_from_checkpoint(
+                pretrained_checkpoint_path, bert_model=params["bert_model"]
+            )
+            model.text_model.load_state_dict(
+                pretrained_model.text_model.roberta.state_dict(), strict=False
+            )
         elif checkpoint_type == "multi":
             model = model.load_from_checkpoint(pretrained_checkpoint_path, **params)
         else:
@@ -79,7 +87,7 @@ def train_finetune_from_checkpoint(
     trainer = pl.Trainer(
         gpus=1,
         accumulate_grad_batches=params["accumulate_grads"],
-        max_epochs=params["num_epochs"],
+        max_epochs=params["max_epochs"],
         progress_bar_refresh_rate=1,
         logger=wandb_logger,
         callbacks=[
@@ -89,6 +97,7 @@ def train_finetune_from_checkpoint(
         val_check_interval=params["val_check_interval"],
         stochastic_weight_avg=params["stochastic_weight_avg"],
         log_every_n_steps=params["accumulate_grads"],
+        gradient_clip_val=params["gradient_clip_val"],
     )
     # Train the model ⚡
     trainer.fit(

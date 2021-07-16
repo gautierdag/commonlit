@@ -7,12 +7,11 @@ from transformers.optimization import get_cosine_schedule_with_warmup
 class BertMLMModel(pl.LightningModule):
     def __init__(
         self,
+        bert_model,
         max_steps=2500,
         learning_rate=1e-5,
         weight_decay=0.1,
-        dropout=0.1,
         warmup_steps=0.06,  # percentage of steps to warmup for
-        bert_model="roberta-base",
         freeze_layers=0,
         scheduler_rate=500,
         **kwargs,
@@ -36,35 +35,43 @@ class BertMLMModel(pl.LightningModule):
         self.freeze_layers = freeze_layers
         self.scheduler_rate = scheduler_rate
 
-
     def forward(self, x):
         return self.text_model(**x)
 
     def training_step(self, batch, batch_idx):
         loss = self(batch).loss
-        self.log('mlm_train_loss', loss)
+        self.log("mlm_train_loss", loss)
         return loss
 
     def validation_step(self, batch, batch_idx):
         loss = self(batch).loss
-        self.log('mlm_val_loss', loss, prog_bar=True)
-
+        self.log("mlm_val_loss", loss, prog_bar=True)
 
     def configure_optimizers(self):
-        # disable weight decay on bias and layernorm 
+        # disable weight decay on bias and layernorm
         no_decay = ["bias", "LayerNorm.weight"]
         optimizer_grouped_parameters = [
             {
-                "params": [p for n, p in self.text_model.named_parameters() if not any(nd in n for nd in no_decay)],
+                "params": [
+                    p
+                    for n, p in self.text_model.named_parameters()
+                    if not any(nd in n for nd in no_decay)
+                ],
                 "weight_decay": self.weight_decay,
             },
             {
-                "params": [p for n, p in self.text_model.named_parameters() if any(nd in n for nd in no_decay)],
+                "params": [
+                    p
+                    for n, p in self.text_model.named_parameters()
+                    if any(nd in n for nd in no_decay)
+                ],
                 "weight_decay": 0.0,
             },
         ]
-        optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=self.learning_rate)
-        
+        optimizer = torch.optim.AdamW(
+            optimizer_grouped_parameters, lr=self.learning_rate
+        )
+
         schedule = get_cosine_schedule_with_warmup(
             optimizer,
             num_warmup_steps=self.warmup,
