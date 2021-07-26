@@ -1,10 +1,11 @@
 from copy import copy
 import wandb
+import gc
 import torch
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import ConcatDataset
+from transformers import AutoTokenizer
 import pytorch_lightning as pl
-
 from pytorch_lightning.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
@@ -15,6 +16,10 @@ from pytorch_lightning.loggers import WandbLogger
 from sampler import BatchSchedulerSampler
 from model import BertClassifierModel
 from mlm_model import BertMLMModel
+
+from dataset import (
+    collate_creator,
+)
 
 
 def get_multitask_params(params):
@@ -34,13 +39,18 @@ def train_multitask(
     all_params,
     train_datasets,
     val_dataset,
-    collate_fn,
     wandb_group,
     pretrained_checkpoint_path=False,
     checkpoint_type="pretrain",
     fold=0,
 ):
     params = get_multitask_params(all_params)
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        f"../input/huggingfacemodels/{params['bert_model']}/tokenizer",
+        model_max_length=params["model_max_length"],
+    )
+    collate_fn = collate_creator(tokenizer)
 
     concat_dataset = ConcatDataset(train_datasets)
     multitask_train_loader = DataLoader(
@@ -49,6 +59,7 @@ def train_multitask(
             dataset=concat_dataset,
             batch_size=params["batch_size"],
             chunk_task_batches=params["chunk_task_batches"],
+            max_size=len(train_datasets[-1]),  # last dataset is the commonlit
         ),
         collate_fn=collate_fn,
         batch_size=params["batch_size"],
@@ -101,9 +112,21 @@ def train_multitask(
             ).load_from_checkpoint(
                 pretrained_checkpoint_path, bert_model=params["bert_model"]
             )
-            model.text_model.load_state_dict(
-                pretrained_model.text_model.roberta.state_dict(), strict=False
-            )
+            if "roberta" in params["bert_model"]:
+                model.text_model.load_state_dict(
+                    pretrained_model.text_model.roberta.state_dict(), strict=False
+                )
+            elif "deberta" in params["bert_model"]:
+                model.text_model.load_state_dict(
+                    pretrained_model.text_model.deberta.state_dict(), strict=False
+                )
+            elif "albert" in params["bert_model"]:
+                model.text_model.load_state_dict(
+                    pretrained_model.text_model.albert.state_dict(), strict=False
+                )
+            else:
+                raise ValueError(f"Unknown bert model {params['bert_model']}")
+
         else:
             assert ValueError("loading from multitask for multitask is not implemented")
 
@@ -118,7 +141,6 @@ def train_multitask(
         callbacks=[
             checkpoint_callback,
             LearningRateMonitor(logging_interval="step"),
-            EarlyStopping(monitor="val_loss", patience=20, mode="min"),
         ],
         val_check_interval=params["val_check_interval"],
         stochastic_weight_avg=params["stochastic_weight_avg"],
@@ -139,6 +161,16 @@ def train_multitask(
     # save model py code
     wandb.save("model.py")
     wandb.finish()
+
+    del (
+        multitask_trainer,
+        multitask_train_loader,
+        multitask_val_loader,
+        model,
+        wandb_logger,
+    )
+    gc.collect()
+    torch.cuda.empty_cache()
 
     return (
         checkpoint_callback.best_model_path,

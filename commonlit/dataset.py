@@ -175,7 +175,10 @@ def get_onestop_df() -> pd.DataFrame:
         if "all_data" in filename:
             continue
         try:
-            tmp_df = pd.read_csv(filename, encoding="cp1252")
+            if ".py" not in filename:
+                tmp_df = pd.read_csv(filename, encoding="cp1252")
+            else:
+                continue
         except Exception as e:
             print(e)
             print(filename)
@@ -190,7 +193,22 @@ def get_onestop_df() -> pd.DataFrame:
             tmp_df[~tmp_df[tmp_df.columns[2]].isna()][tmp_df.columns[2]].values
         )
         onestop.append(
-            {"text_easy": elementary, "text_med": intermediate, "text_hard": advanced}
+            {
+                "simple_text": elementary,
+                "hard_text": intermediate,
+            }
+        )
+        onestop.append(
+            {
+                "simple_text": elementary,
+                "hard_text": advanced,
+            }
+        )
+        onestop.append(
+            {
+                "simple_text": intermediate,
+                "hard_text": advanced,
+            }
         )
         i += 1
     return pd.DataFrame(onestop)

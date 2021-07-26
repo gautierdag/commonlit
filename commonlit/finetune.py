@@ -1,8 +1,8 @@
 import wandb
 import torch
+from transformers import AutoTokenizer
 from torch.utils.data import DataLoader
 import pytorch_lightning as pl
-from copy import copy
 import gc
 
 from pytorch_lightning.callbacks import (
@@ -14,24 +14,31 @@ from pytorch_lightning.loggers import WandbLogger
 from model import BertClassifierModel
 from mlm_model import BertMLMModel
 
+from dataset import collate_creator
+
 
 def train_finetune_from_checkpoint(
     params,
     train_dataset,
     val_dataset,
-    collate_fn,
     wandb_group,
     pretrained_checkpoint_path=False,
     checkpoint_type="multi",
     fold=0,
 ):
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        f"../input/huggingfacemodels/{params['bert_model']}/tokenizer",
+        model_max_length=params["model_max_length"],
+    )
+    collate_fn = collate_creator(tokenizer)
+
     train_loader = DataLoader(
         dataset=train_dataset,
         shuffle=True,
         collate_fn=collate_fn,
         batch_size=params["batch_size"],
         num_workers=6,
-        # pin_memory=torch.cuda.is_available(),
     )
     val_loader = DataLoader(
         dataset=val_dataset,
@@ -39,7 +46,6 @@ def train_finetune_from_checkpoint(
         shuffle=False,
         collate_fn=collate_fn,
         num_workers=6,
-        # pin_memory=torch.cuda.is_available(),
     )
 
     params["max_steps"] = int(
@@ -74,15 +80,32 @@ def train_finetune_from_checkpoint(
             ).load_from_checkpoint(
                 pretrained_checkpoint_path, bert_model=params["bert_model"]
             )
-            model.text_model.load_state_dict(
-                pretrained_model.text_model.roberta.state_dict(), strict=False
-            )
+            if "roberta" in params["bert_model"]:
+                model.text_model.load_state_dict(
+                    pretrained_model.text_model.roberta.state_dict(), strict=False
+                )
+            elif "deberta" in params["bert_model"]:
+                model.text_model.load_state_dict(
+                    pretrained_model.text_model.deberta.state_dict(), strict=False
+                )
+            elif "albert" in params["bert_model"]:
+                model.text_model.load_state_dict(
+                    pretrained_model.text_model.albert.state_dict(), strict=False
+                )
+            else:
+                raise ValueError(f"Unknown bert model {params['bert_model']}")
+
         elif checkpoint_type == "multi":
+            if params[
+                "resume_optim_from_checkpoint"
+            ]:  # Whether to resume optimiser state
+                params["optim_checkpoint_path"] = pretrained_checkpoint_path
             model = model.load_from_checkpoint(pretrained_checkpoint_path, **params)
         else:
             assert ValueError(f"Loading from {checkpoint_type} is not implemented")
 
     print(f"Final Finetuning Training:")
+
     # Initialize a trainer
     trainer = pl.Trainer(
         gpus=1,
@@ -114,6 +137,7 @@ def train_finetune_from_checkpoint(
 
     del trainer, train_loader, val_loader, model, wandb_logger
     gc.collect()
+    torch.cuda.empty_cache()
 
     return (
         checkpoint_callback.best_model_path,

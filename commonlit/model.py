@@ -2,8 +2,32 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
+
 from transformers import AutoModel, AutoConfig
 from transformers.optimization import get_cosine_schedule_with_warmup
+
+from torchmetrics import Metric
+
+
+class RMSE(Metric):
+    def __init__(self, dist_sync_on_step=False):
+        super().__init__(dist_sync_on_step=dist_sync_on_step)
+
+        self.add_state(
+            "mse_sum", default=torch.tensor(0, dtype=float), dist_reduce_fx="sum"
+        )
+        self.add_state(
+            "total", default=torch.tensor(0, dtype=float), dist_reduce_fx="sum"
+        )
+
+    def update(self, preds: torch.Tensor, target: torch.Tensor):
+        assert preds.shape == target.shape
+        self.mse_sum += torch.nn.functional.mse_loss(preds, target, reduction="sum")
+        self.total += target.numel()
+
+    def compute(self):
+        rmse = torch.sqrt(self.mse_sum / self.total)
+        return rmse
 
 
 def get_bert_layerwise_lr_groups(bert_model, learning_rate=1e-5, layer_decay=0.9):
@@ -18,23 +42,41 @@ def get_bert_layerwise_lr_groups(bert_model, learning_rate=1e-5, layer_decay=0.9
     Returns:
         grouped_parameters (list): list of parameters with their decayed learning rates
     """
-
-    n_layers = len(bert_model.encoder.layer) + 1  # + 1 (embedding)
-
-    embedding_decayed_lr = learning_rate * (layer_decay ** (n_layers + 1))
-    grouped_parameters = [
-        {"params": bert_model.embeddings.parameters(), "lr": embedding_decayed_lr}
-    ]
-    for depth in range(1, n_layers):
-        decayed_lr = learning_rate * (layer_decay ** (n_layers + 1 - depth))
-        grouped_parameters.append(
+    if hasattr(bert_model, "encoder"):
+        n_layers = len(bert_model.encoder.layer) + 1  # + 1 (embedding)
+        embedding_decayed_lr = learning_rate * (layer_decay ** (n_layers + 1))
+        grouped_parameters = [
+            {"params": bert_model.embeddings.parameters(), "lr": embedding_decayed_lr}
+        ]
+        for depth in range(1, n_layers):
+            decayed_lr = learning_rate * (layer_decay ** (n_layers + 1 - depth))
+            grouped_parameters.append(
+                {
+                    "params": bert_model.encoder.layer[depth - 1].parameters(),
+                    "lr": decayed_lr,
+                }
+            )
+        return grouped_parameters
+    elif hasattr(bert_model, "layer"):  # XLNET
+        n_layers = len(bert_model.layer) + 1
+        embedding_decayed_lr = learning_rate * (layer_decay ** (n_layers + 1))
+        grouped_parameters = [
             {
-                "params": bert_model.encoder.layer[depth - 1].parameters(),
-                "lr": decayed_lr,
+                "params": bert_model.word_embedding.parameters(),
+                "lr": embedding_decayed_lr,
             }
-        )
-
-    return grouped_parameters
+        ]
+        for depth in range(1, n_layers):
+            decayed_lr = learning_rate * (layer_decay ** (n_layers + 1 - depth))
+            grouped_parameters.append(
+                {
+                    "params": bert_model.layer[depth - 1].parameters(),
+                    "lr": decayed_lr,
+                }
+            )
+        return grouped_parameters
+    else:
+        raise ValueError("cannot get bert layerwise groups")
 
 
 class BertClassifierModel(pl.LightningModule):
@@ -49,12 +91,16 @@ class BertClassifierModel(pl.LightningModule):
         warmup_steps=0.06,  # percentage of steps to warmup for
         dense_dim=None,
         custom_linear_init=True,
+        pooling="attention",
         freeze_layers=0,
         scheduler_rate=500,
         decay_lr=True,
-        use_tanh_constraint=False,
+        output_constraint="tanh",
         commonlit_loss_weight=1,  # loss multiplier for commonlit
         sqrt_mse_loss=False,  # whether to sqrt the loss during training
+        optim_checkpoint_path=None,  # path to a checkpoint with optimizer object
+        model_max_length=256,  # max length that model is trained with
+        deepspeed=False,
         **kwargs,
     ):
 
@@ -74,18 +120,22 @@ class BertClassifierModel(pl.LightningModule):
             dense_dim = self.text_model.config.hidden_size
 
         self.decay_lr = decay_lr
-        self.use_tanh_constraint = use_tanh_constraint
+        self.output_constraint = output_constraint
         self.commonlit_loss_weight = commonlit_loss_weight
         self.sqrt_mse_loss = sqrt_mse_loss
+        self.pooling = pooling
 
-        # self.dense = nn.Linear(self.text_model.config.hidden_size,
-        #                        dense_dim)
-        self.dense = nn.Sequential(
-            nn.Linear(self.text_model.config.hidden_size, 512),
-            nn.Tanh(),
-            nn.Linear(512, 1),
-            nn.Softmax(dim=1),
-        )
+        self.model_max_length = model_max_length
+
+        if self.pooling == "attention":
+            self.dense = nn.Sequential(
+                nn.Linear(self.text_model.config.hidden_size, 512),
+                nn.Tanh(),
+                nn.Linear(512, 1),
+                nn.Softmax(dim=1),
+            )
+            if custom_linear_init:
+                list(map(self.initialise, self.dense))
 
         self.output_layers = nn.ModuleDict(
             [
@@ -100,7 +150,7 @@ class BertClassifierModel(pl.LightningModule):
 
         self.dropout = nn.Dropout(dropout)
         self.criterion = nn.MSELoss(reduction="sum")
-        self.eval_criterion = nn.MSELoss()
+        self.eval_criterion = RMSE()
 
         # optimiser settings
         self.learning_rate = learning_rate
@@ -110,10 +160,11 @@ class BertClassifierModel(pl.LightningModule):
         self.warmup = int(max_steps * warmup_steps)
         self.freeze_layers = freeze_layers
         self.scheduler_rate = scheduler_rate
+        self.optim_checkpoint_path = optim_checkpoint_path
+        self.deepspeed = deepspeed
 
         if custom_linear_init:
             list(map(self.initialise, self.output_layers.values()))
-            list(map(self.initialise, self.dense))
 
     def initialise(self, module):
         if isinstance(module, nn.Linear):
@@ -127,16 +178,28 @@ class BertClassifierModel(pl.LightningModule):
         outputs = self.text_model(**text_input)[0]
         # x = self.dropout(outputs[0]).mean(dim=1) # use CLS token
         # x = self.dense(x).tanh()
-
-        weights = self.dense(outputs)
-        x = torch.sum(weights * outputs, dim=1)
+        if self.pooling == "attention":
+            weights = self.dense(outputs)
+            x = torch.sum(weights * outputs, dim=1)
+        elif self.pooling == "mean":
+            # sum over non-masked outputs
+            x = (text_input["attention_mask"].unsqueeze(-1) * outputs).sum(dim=1)
+            # average over non-masked outputs - clamp to ensure no divide by 0
+            x = x / torch.clamp(
+                text_input["attention_mask"].sum(dim=1).unsqueeze(-1), min=1e-9
+            )
+        else:
+            raise ValueError(f"Pooling for {self.pooling} is not implemented")
 
         x = self.dropout(x)
         predictions = self.output_layers[dataset_name](x)
 
         # whether to constrain output between the
-        if dataset_name == "commonlit" and self.use_tanh_constraint:
-            return ((predictions.tanh() * 2.9) - 1).squeeze(1)
+        if dataset_name == "commonlit":
+            if self.output_constraint == "tanh":
+                predictions = (predictions.tanh() * 2.9) - 1
+            elif self.output_constraint == "clamp":
+                predictions = (predictions - 1).clamp(min=-3.68, max=1.72)
         return predictions.squeeze(1)
 
     def training_step(self, batch, batch_nb):
@@ -161,16 +224,25 @@ class BertClassifierModel(pl.LightningModule):
             target_loss = target_loss * self.commonlit_loss_weight
         else:
             self.log(f"{batch['dataset_name']}_train_loss", target_loss)
-
         return target_loss
 
     def validation_step(self, val_batch, val_batch_idx, **kwargs):
         predicted_targets = self(**val_batch)
-        target_loss = torch.sqrt(
-            self.eval_criterion(predicted_targets, val_batch["target"])
-        )
-        self.log("val_loss", target_loss, prog_bar=True)
-        return target_loss
+        self.eval_criterion.update(predicted_targets, val_batch["target"])
+
+    def validation_epoch_end(self, outs):
+        # log epoch metric
+        self.log("val_loss", self.eval_criterion.compute(), prog_bar=True)
+        self.eval_criterion.reset()
+
+
+    def test_step(self, test_batch, test_batch_idx, **kwargs):
+        predicted_targets = self(**test_batch)
+        self.eval_criterion.update(predicted_targets, test_batch["target"])
+
+    def test_epoch_end(self, outs):
+        # log epoch metric
+        self.log("test_loss", self.eval_criterion.compute())
 
     def configure_optimizers(self):
         # freeze bottom layers
@@ -187,10 +259,12 @@ class BertClassifierModel(pl.LightningModule):
             lr_groups = get_bert_layerwise_lr_groups(
                 self.text_model, learning_rate=self.learning_rate
             )
+
             non_bert_layers = [
-                self.dense,
                 self.output_layers,
             ]  # important to update this
+            if self.pooling == "attention":
+                non_bert_layers.append(self.dense)
             non_bert_layers = [
                 {"params": l.parameters(), "lr": self.learning_rate}
                 for l in non_bert_layers
@@ -202,6 +276,14 @@ class BertClassifierModel(pl.LightningModule):
         optimizer = torch.optim.AdamW(
             lr_groups, lr=self.learning_rate, weight_decay=self.weight_decay
         )
+
+        if self.optim_checkpoint_path is not None:
+            print("loading optimiser state from checkpoint:")
+            optimizer.load_state_dict(
+                torch.load(self.optim_checkpoint_path)["optimizer_states"][0]
+            )
+            for groups in optimizer.param_groups:
+                groups["lr"] = self.learning_rate
 
         if self.use_warmup:
             schedule = get_cosine_schedule_with_warmup(
@@ -222,11 +304,12 @@ class BertClassifierModel(pl.LightningModule):
                 "scheduler": torch.optim.lr_scheduler.ReduceLROnPlateau(
                     optimizer,
                     mode="min",
-                    patience=6,
+                    patience=25,
                 ),
                 "monitor": "val_loss",
                 "interval": "step",
                 "reduce_on_plateau": True,
                 "frequency": scheduler_rate,
+                "name": "learning_rate",  # uncomment if using LearningRateMonitor
             }
         return [optimizer], [scheduler]

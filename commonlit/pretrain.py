@@ -1,9 +1,10 @@
 import wandb
-import torch
 from torch.utils.data import DataLoader
+from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 import pytorch_lightning as pl
 from copy import copy
 import gc
+from pytorch_lightning.plugins import DeepSpeedPlugin
 
 from pytorch_lightning.callbacks import (
     LearningRateMonitor,
@@ -12,6 +13,8 @@ from pytorch_lightning.callbacks import (
 from pytorch_lightning.loggers import WandbLogger
 
 from mlm_model import BertMLMModel
+
+from dataset import get_mlm_dataset
 
 
 def get_pretrain_params(params):
@@ -27,10 +30,21 @@ def get_pretrain_params(params):
     return pretrain_params
 
 
-def train_pretrain(
-    all_params, mlm_train_dataset, mlm_val_dataset, mlm_collate_fn, wandb_group
-):
+def train_pretrain(all_params, wandb_group):
     params = get_pretrain_params(all_params)
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        f"../input/huggingfacemodels/{params['bert_model']}/tokenizer",
+        model_max_length=params["model_max_length"],
+    )
+    mlm_collate_fn = DataCollatorForLanguageModeling(
+        tokenizer=tokenizer, mlm_probability=params["mlm_probability"]
+    )
+
+    mlm_train_dataset, mlm_val_dataset = get_mlm_dataset(
+        tokenizer,
+        use_external_files=params["pretrain_external_files"],
+    )
 
     pretrain_train_loader = DataLoader(
         mlm_train_dataset,

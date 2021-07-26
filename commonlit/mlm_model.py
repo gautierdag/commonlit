@@ -2,6 +2,8 @@ import torch
 import pytorch_lightning as pl
 from transformers import AutoConfig, AutoModelForMaskedLM
 from transformers.optimization import get_cosine_schedule_with_warmup
+from deepspeed.ops.adam import FusedAdam
+from deepspeed.ops.adam import DeepSpeedCPUAdam
 
 
 class BertMLMModel(pl.LightningModule):
