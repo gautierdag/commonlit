@@ -100,7 +100,7 @@ class BertClassifierModel(pl.LightningModule):
         sqrt_mse_loss=False,  # whether to sqrt the loss during training
         optim_checkpoint_path=None,  # path to a checkpoint with optimizer object
         model_max_length=256,  # max length that model is trained with
-        deepspeed=False,
+        use_textstat=False,
         **kwargs,
     ):
 
@@ -137,14 +137,59 @@ class BertClassifierModel(pl.LightningModule):
             if custom_linear_init:
                 list(map(self.initialise, self.dense))
 
+        self.use_textstat = use_textstat
+        if use_textstat:
+            dense_dim += 6
         self.output_layers = nn.ModuleDict(
             [
-                ["commonlit", nn.Linear(dense_dim, 1)],
-                ["wiki", nn.Linear(dense_dim, 1)],
-                ["onestop", nn.Linear(dense_dim, 1)],
-                ["race", nn.Linear(dense_dim, 1)],
-                ["ck_12", nn.Linear(dense_dim, 1)],
-                ["weebit", nn.Linear(dense_dim, 1)],
+                [
+                    "commonlit",
+                    nn.Sequential(
+                        nn.Linear(dense_dim, dense_dim // 2),
+                        nn.Tanh(),
+                        nn.Linear(dense_dim // 2, 1),
+                    ),
+                ],
+                [
+                    "wiki",
+                    nn.Sequential(
+                        nn.Linear(dense_dim, dense_dim // 2),
+                        nn.Tanh(),
+                        nn.Linear(dense_dim // 2, 1),
+                    ),
+                ],
+                [
+                    "onestop",
+                    nn.Sequential(
+                        nn.Linear(dense_dim, dense_dim // 2),
+                        nn.Tanh(),
+                        nn.Linear(dense_dim // 2, 1),
+                    ),
+                ],
+                [
+                    "race",
+                    nn.Sequential(
+                        nn.Linear(dense_dim, dense_dim // 2),
+                        nn.Tanh(),
+                        nn.Linear(dense_dim // 2, 1),
+                    ),
+                ],
+                [
+                    "ck_12",
+                    nn.Sequential(
+                        nn.Linear(dense_dim, dense_dim // 2),
+                        nn.Tanh(),
+                        nn.Linear(dense_dim // 2, 1),
+                    ),
+                ],
+                [
+                    "weebit",
+                    nn.Sequential(
+                        nn.Linear(dense_dim, dense_dim // 2),
+                        nn.Tanh(),
+                        nn.Linear(dense_dim // 2, 1),
+                    ),
+                ],
             ]
         )
 
@@ -161,7 +206,6 @@ class BertClassifierModel(pl.LightningModule):
         self.freeze_layers = freeze_layers
         self.scheduler_rate = scheduler_rate
         self.optim_checkpoint_path = optim_checkpoint_path
-        self.deepspeed = deepspeed
 
         if custom_linear_init:
             list(map(self.initialise, self.output_layers.values()))
@@ -174,10 +218,8 @@ class BertClassifierModel(pl.LightningModule):
             if module.bias is not None:
                 module.bias.data.zero_()
 
-    def forward(self, text_input, dataset_name="commonlit", **kwargs):
+    def forward(self, text_input, dataset_name="commonlit", textstats=None, **kwargs):
         outputs = self.text_model(**text_input)[0]
-        # x = self.dropout(outputs[0]).mean(dim=1) # use CLS token
-        # x = self.dense(x).tanh()
         if self.pooling == "attention":
             weights = self.dense(outputs)
             x = torch.sum(weights * outputs, dim=1)
@@ -192,6 +234,10 @@ class BertClassifierModel(pl.LightningModule):
             raise ValueError(f"Pooling for {self.pooling} is not implemented")
 
         x = self.dropout(x)
+
+        if self.use_textstat:
+            x = torch.cat([x, textstats], 1)
+
         predictions = self.output_layers[dataset_name](x)
 
         # whether to constrain output between the
@@ -205,10 +251,14 @@ class BertClassifierModel(pl.LightningModule):
     def training_step(self, batch, batch_nb):
         if "text_input1" in batch:
             predicted_targets_1 = self(
-                text_input=batch["text_input1"], dataset_name=batch["dataset_name"]
+                text_input=batch["text_input1"],
+                textstats=batch["textstats1"],
+                dataset_name=batch["dataset_name"],
             )
             predicted_targets_2 = self(
-                text_input=batch["text_input2"], dataset_name=batch["dataset_name"]
+                text_input=batch["text_input2"],
+                textstats=batch["textstats2"],
+                dataset_name=batch["dataset_name"],
             )
             target_loss = F.margin_ranking_loss(
                 predicted_targets_1, predicted_targets_2, batch["target"]
@@ -234,7 +284,6 @@ class BertClassifierModel(pl.LightningModule):
         # log epoch metric
         self.log("val_loss", self.eval_criterion.compute(), prog_bar=True)
         self.eval_criterion.reset()
-
 
     def test_step(self, test_batch, test_batch_idx, **kwargs):
         predicted_targets = self(**test_batch)

@@ -1,9 +1,10 @@
-from dataset import collate_creator, get_full_train_dataset, get_ybins
+from dataset import get_full_train_dataset
 import logging
 import wandb
 import os
 from sklearn.model_selection import KFold
 from pytorch_lightning.utilities.seed import seed_everything
+import torch
 from torch.utils.data import Subset
 
 from settings import env_settings
@@ -32,7 +33,7 @@ dataset = get_full_train_dataset()
 multitask_datasets = get_multitask_datasets()
 
 # Log Group
-group = f"{hyperparameter_defaults['bert_model']}_" + wandb.util.generate_id()
+group = f"{hyperparameter_defaults['bert_model']}_textstats_" + wandb.util.generate_id()
 group = group.replace("/", "-")
 
 
@@ -48,7 +49,9 @@ if hyperparameter_defaults["pretrain"]:
     pretrained_checkpoint_path = best_pretrain_model
 
 
-pretrained_checkpoint_path = "models/roberta-large_2dkr8n9d_pretrain.ckpt"
+pretrained_checkpoint_path = "models/microsoft-deberta-large_1hee8w4o_pretrain.ckpt"
+# pretrained_checkpoint_path = "models/roberta-large_vu6idu4y_pretrain.ckpt"
+
 
 # pretrained_multi_checkpoints = [
 #     "models/roberta-large_2dkr8n9d_fold_0_multi-val_loss=0.45.ckpt",
@@ -59,7 +62,10 @@ pretrained_checkpoint_path = "models/roberta-large_2dkr8n9d_pretrain.ckpt"
 # ]
 
 for fold, (train_ids, val_ids) in enumerate(skf.split(dataset)):
+    torch.cuda.empty_cache()
     print(f"Starting fold {fold} for {group}")
+    if fold in [0, 1, 2]:
+        continue
 
     train_dataset = Subset(dataset, train_ids)
     val_dataset = Subset(dataset, val_ids)

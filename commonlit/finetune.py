@@ -13,7 +13,6 @@ from pytorch_lightning.loggers import WandbLogger
 
 from model import BertClassifierModel
 from mlm_model import BertMLMModel
-
 from dataset import collate_creator
 
 
@@ -31,7 +30,7 @@ def train_finetune_from_checkpoint(
         f"../input/huggingfacemodels/{params['bert_model']}/tokenizer",
         model_max_length=params["model_max_length"],
     )
-    collate_fn = collate_creator(tokenizer)
+    collate_fn = collate_creator(tokenizer, use_textstat=params["use_textstat"])
 
     train_loader = DataLoader(
         dataset=train_dataset,

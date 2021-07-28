@@ -4,7 +4,6 @@ from transformers import AutoTokenizer, DataCollatorForLanguageModeling
 import pytorch_lightning as pl
 from copy import copy
 import gc
-from pytorch_lightning.plugins import DeepSpeedPlugin
 
 from pytorch_lightning.callbacks import (
     LearningRateMonitor,

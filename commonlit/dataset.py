@@ -3,11 +3,26 @@ import pandas as pd
 import torch
 import os
 from datasets import Dataset, DatasetDict
-from datasets import load_dataset
 
 from sklearn.preprocessing import KBinsDiscretizer
 import numpy as np
+import textstat
+import pickle
 from typing import List
+
+
+TEXTSTAT_SCALER = pickle.load(open("textstats_scaler.pkl", "rb"))
+
+
+def get_text_stat_vector(text: str) -> np.array:
+    scores = np.zeros(6)
+    scores[0] = textstat.flesch_reading_ease(text)
+    scores[1] = textstat.coleman_liau_index(text)
+    scores[2] = textstat.automated_readability_index(text)
+    scores[3] = textstat.dale_chall_readability_score(text)
+    scores[4] = textstat.linsear_write_formula(text)
+    scores[5] = textstat.gunning_fog(text)
+    return scores
 
 
 class PretrainComparaisonDataset(torch.utils.data.Dataset):
@@ -37,6 +52,10 @@ class PretrainComparaisonDataset(torch.utils.data.Dataset):
         if target == 0:
             target = -1
         sample["target"] = target
+
+        sample["textstats1"] = get_text_stat_vector(sample["text_input1"])
+        sample["textstats2"] = get_text_stat_vector(sample["text_input2"])
+
         return sample
 
 
@@ -54,12 +73,16 @@ class CommonDataset(torch.utils.data.Dataset):
             "target": self.df.iloc[idx].target,
             "dataset_name": self.dataset_name,
         }
+        sample["textstats"] = get_text_stat_vector(sample["text_input"])
+
         return sample
 
 
-def collate_creator(tokenizer):
+def collate_creator(tokenizer, use_textstat=False):
     def collate_fn(batch):
         items = {}
+        items["textstats1"] = None
+        items["textstats2"] = None
         for key in batch[0].keys():
             if "text_input" in key:
                 items[key] = tokenizer(
@@ -68,6 +91,12 @@ def collate_creator(tokenizer):
                     return_tensors="pt",
                     truncation=True,
                 )
+            if use_textstat and "textstats" in key:
+                items[key] = torch.tensor(
+                    TEXTSTAT_SCALER.transform(
+                        [batch_item[key] for batch_item in batch]
+                    ),
+                ).float()
         items["target"] = torch.tensor(
             [batch_item["target"] for batch_item in batch]
         ).float()
@@ -265,9 +294,8 @@ def get_mlm_dataset(tokenizer, use_external_files=False):
                     weebit_df.excerpt,
                     wiki_df.simple_text,
                     wiki_df.hard_text,
-                    onestop_df.text_easy,
-                    onestop_df.text_med,
-                    onestop_df.text_hard,
+                    onestop_df.simple_text,
+                    onestop_df.hard_text,
                     train_df.excerpt,
                 ]
             )

@@ -7,7 +7,6 @@ from torch.utils.data.dataset import ConcatDataset
 from transformers import AutoTokenizer
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import (
-    EarlyStopping,
     LearningRateMonitor,
     ModelCheckpoint,
 )
@@ -16,10 +15,7 @@ from pytorch_lightning.loggers import WandbLogger
 from sampler import BatchSchedulerSampler
 from model import BertClassifierModel
 from mlm_model import BertMLMModel
-
-from dataset import (
-    collate_creator,
-)
+from dataset import collate_creator
 
 
 def get_multitask_params(params):
@@ -50,7 +46,7 @@ def train_multitask(
         f"../input/huggingfacemodels/{params['bert_model']}/tokenizer",
         model_max_length=params["model_max_length"],
     )
-    collate_fn = collate_creator(tokenizer)
+    collate_fn = collate_creator(tokenizer, use_textstat=params["use_textstat"])
 
     concat_dataset = ConcatDataset(train_datasets)
     multitask_train_loader = DataLoader(

@@ -1,9 +1,7 @@
 import torch
 import pytorch_lightning as pl
-from transformers import AutoConfig, AutoModelForMaskedLM
+from transformers import AutoModelForMaskedLM
 from transformers.optimization import get_cosine_schedule_with_warmup
-from deepspeed.ops.adam import FusedAdam
-from deepspeed.ops.adam import DeepSpeedCPUAdam
 
 
 class BertMLMModel(pl.LightningModule):
@@ -23,8 +21,6 @@ class BertMLMModel(pl.LightningModule):
         self.model_type = "BertClassifierModel"
 
         # Load Text Model
-        # config = AutoConfig.from_pretrained(f"../input/huggingfacemodels/{bert_model}/transformer")
-        # config.update({"layer_norm_eps": 1e-7, "hidden_dropout_prob": dropout})
         self.text_model = AutoModelForMaskedLM.from_pretrained(
             f"../input/huggingfacemodels/{bert_model}/transformer"
         )
