@@ -12,7 +12,7 @@ For this competition, we were to rate the complexity of reading passages for gra
 
 We used a simple ensemble of different pretrained and subsequenetly fine-tuned Transformers. We trained multiple different architectures, such as roberta-base (Liu et. al., 2019) and deberta-large (He et. al., 2020), and also used multiple different training regimes and external reading comprehension datasets.
 
-![Approaches to Fine-tuning BERT from Sun, Chi et. al.](/assets/images/commonlit.png)
+![Approaches to Fine-tuning BERT from Sun, Chi et. al.](commonlit.png)
 
 Following the recommendations in Sun, Chi, et al. on "How to fine-tune bert for text classification", we experimented with different regimes of pretraining and finetuning. The picture, taken from their paper, outlines with different colored paths, different approaches that can be taken to fine-tune transformer models on a task.
 
