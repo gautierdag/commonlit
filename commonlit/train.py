@@ -50,16 +50,6 @@ if hyperparameter_defaults["pretrain"]:
 
 
 pretrained_checkpoint_path = "models/microsoft-deberta-large_1hee8w4o_pretrain.ckpt"
-# pretrained_checkpoint_path = "models/roberta-large_vu6idu4y_pretrain.ckpt"
-
-
-# pretrained_multi_checkpoints = [
-#     "models/roberta-large_2dkr8n9d_fold_0_multi-val_loss=0.45.ckpt",
-#     "models/roberta-large_2dkr8n9d_fold_1_multi-val_loss=0.43.ckpt",
-#     "models/roberta-large_2dkr8n9d_fold_2_multi-val_loss=0.46.ckpt",
-#     "models/roberta-large_2dkr8n9d_fold_3_multi-val_loss=0.48.ckpt",
-#     "models/roberta-large_2dkr8n9d_fold_4_multi-val_loss=0.46.ckpt",
-# ]
 
 for fold, (train_ids, val_ids) in enumerate(skf.split(dataset)):
     torch.cuda.empty_cache()
